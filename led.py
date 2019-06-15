@@ -32,13 +32,13 @@ def test_led(gpio, led):
 def off(gpio, leds):
     for led in leds:
         for pin in led:
-            gpio.write(pin, 0)
+            gpio.write(pin, 1)
 
 
 def on(gpio, leds):
     for led in leds:
         for pin in led:
-            gpio.write(pin, 1)
+            gpio.write(pin, 0)
 
 
 def main():
