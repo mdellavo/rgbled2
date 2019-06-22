@@ -1,21 +1,22 @@
 import time
 import abc
+import queue
 
 from gpiozero import Button, RGBLED, TonalBuzzer
 from gpiozero.tones import Tone
-from colorzero import Color
+from colorzero import Color, Hue
 
-Color.repr_style = "rgb"
-
+FPS_INTERVAL = 30
 FPS = 60
 TICK = 1000./FPS
 
 LED_PINS = [
-    (21, 20, 16),
+    (16, 20, 21),
     (13, 19, 26),
     (18, 23, 24),
-    (17, 27, 22),
+    (17, 22, 27),
 ]
+NUM_LEDS = len(LED_PINS)
 
 BUTTON_PIN = 12
 BUZZER_PIN = 25
@@ -25,23 +26,31 @@ def printf(fmt, *args, **kwargs):
     print(fmt.format(*args, **kwargs))
 
 
-class LightCue:
-    def __init__(self, at, leds, color):
+class ToneCue:
+    def __init__(self, at, tone):
         self.at = at
-        self.leds = leds
+        self.tone = tone
+
+    def apply(self, buzzer):
+        buzzer.play(self.tone)
+
+
+class LightCue:
+    def __init__(self, at, indexes, color):
+        self.at = at
+        self.indexes = indexes
         self.color = color
 
     def __str__(self):
-        return "<LightCue(at={}, color={})>".format(self.at, self.color)
+        return "<LightCue(at={}, indexes={}, color={})>".format(self.at, self.indexes, self.color.hsv)
 
-    def apply(self):
-        for led in self.leds:
+    def apply(self, leds):
+        for index in self.indexes:
+            led = leds[index]
             led.color = self.color
 
 
 class Scene(metaclass=abc.ABCMeta):
-    def __init__(self, leds):
-        self.leds = leds
 
     @abc.abstractmethod
     def light_cues(self):
@@ -51,18 +60,15 @@ class Scene(metaclass=abc.ABCMeta):
 class Rainbow(Scene):
     def light_cues(self):
         i = 0
-        colors = (
-                list(Color(1, 0, 0).gradient(Color(0, 1, 0), steps=100)) +
-                list(Color(0, 1, 0).gradient(Color(0, 0, 1), steps=100)) +
-                list(Color(0, 0, 1).gradient(Color(1, 0, 0), steps=100))
-        )
+        color = Color.from_hsv(h=1, s=1, v=1)
         while True:
             yield LightCue(
                 at=time.time() + .1,
-                leds=self.leds,
-                color=colors[i % len(colors)]
+                indexes=[0, 1, 2],
+                color=color
             )
             i += 1
+            color += Hue(deg=1)
 
 
 # FIXME factor out handler interface
@@ -123,9 +129,10 @@ class ButtonState:
 
 def main():
     leds = [RGBLED(r, g, b) for r, g, b in LED_PINS]
-    scene = Rainbow(leds)
+    scene = Rainbow()
     button = Button(BUTTON_PIN)
     buzzer = TonalBuzzer(BUZZER_PIN)
+    sound_cues = queue.Queue()
 
     class DebugState(ButtonState):
         def on_button_down(self):
@@ -150,23 +157,45 @@ def main():
 
     button_state = DebugState()
 
+    def _next_sound_cue():
+        rv = None
+        try:
+            rv = sound_cues.get_nowait()
+        except queue.Empty:
+            pass
+        return rv
+
     tick = 0
     last = time.time()
+    total_time = 0
     light_cues = scene.light_cues()
     next_light_cue = next(light_cues)
+    next_sound_cue = _next_sound_cue()
+
     while True:
         now = time.time()
         button_state.update(now, button.is_pressed)
 
-        if now >= next_light_cue.at:
-            print("light cue", next_light_cue)
-            next_light_cue.apply()
+        if next_light_cue and now >= next_light_cue.at:
+            # print("light cue", next_light_cue)
+            next_light_cue.apply(leds)
             next_light_cue = next(light_cues)
+
+        if next_sound_cue and now >= next_sound_cue.at:
+            # print("sound cue", next_sound_cue)
+            next_sound_cue.apply(buzzer)
+            next_sound_cue = _next_sound_cue()
 
         delta = now - last
         last = now
         time.sleep(max(TICK - delta, 0) / 1000.)
         tick += 1
+        total_time += delta
+
+        if total_time > FPS_INTERVAL:
+            print("fps", tick / FPS_INTERVAL)
+            total_time = 0
+            tick = 0
 
 
 if __name__ == "__main__":
