@@ -26,13 +26,41 @@ def printf(fmt, *args, **kwargs):
     print(fmt.format(*args, **kwargs))
 
 
+NOTE_WHOLE, NOTE_HALF, NOTE_QUARTER, NOTE_EIGHTH, NOTE_SIXTEENTH = [4000/(2**i) for i in range(5)]
+
+
 class ToneCue:
     def __init__(self, at, tone):
         self.at = at
         self.tone = tone
 
     def apply(self, buzzer):
-        buzzer.play(self.tone)
+        buzzer.play(self.tone) if self.tone else buzzer.stop()
+
+    def __str__(self):
+        return "<ToneCue(at={}, tone={})>".format(self.at, self.tone)
+
+
+def play_melody(sound_queue, notes):
+    def _enqueue_tone(tone_cue):
+        try:
+            sound_queue.put_nowait(tone_cue)
+        except queue.Full:
+            pass
+
+    def _note2tones(t, tone, duration):
+        start = ToneCue(t, Tone(tone))
+        stop = ToneCue(t + duration, None)
+        return start, stop
+
+    t = time.time()
+    for tone, duration in notes:
+        duration /= 1000
+        start, stop = _note2tones(t, tone, duration)
+        _enqueue_tone(start)
+        _enqueue_tone(stop)
+        t += duration
+    return t
 
 
 class LightCue:
@@ -69,6 +97,11 @@ class Rainbow(Scene):
             )
             i += 1
             color += Hue(deg=1)
+
+
+class Kaleidoscope(Scene):
+    def light_cues(self):
+        pass
 
 
 # FIXME factor out handler interface
@@ -169,6 +202,13 @@ def main():
     last = time.time()
     total_time = 0
     light_cues = scene.light_cues()
+
+    play_melody(sound_cues, [
+        ("A4", NOTE_EIGHTH),
+        ("B4", NOTE_EIGHTH),
+        ("C4", NOTE_EIGHTH),
+    ])
+
     next_light_cue = next(light_cues)
     next_sound_cue = _next_sound_cue()
 
@@ -188,7 +228,8 @@ def main():
 
         delta = now - last
         last = now
-        time.sleep(max(TICK - delta, 0) / 1000.)
+        sleep_time = max(TICK - delta, 0) / 1000.
+        time.sleep(sleep_time)
         tick += 1
         total_time += delta
 
