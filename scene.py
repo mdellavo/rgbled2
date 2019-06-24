@@ -1,10 +1,11 @@
-import time
 import abc
+import time
 import queue
+import random
 
 from gpiozero import Button, RGBLED, TonalBuzzer
 from gpiozero.tones import Tone
-from colorzero import Color, Hue
+from colorzero import Color, Hue, ease_in_out
 
 FPS_INTERVAL = 30
 FPS = 60
@@ -49,8 +50,8 @@ def play_melody(sound_queue, notes):
             pass
 
     def _note2tones(t, tone, duration):
-        start = ToneCue(t, Tone(tone))
-        stop = ToneCue(t + duration, None)
+        start = ToneCue(t, Tone(tone) if tone else None)
+        stop = ToneCue(t + duration, None) if tone else None
         return start, stop
 
     t = time.time()
@@ -58,7 +59,8 @@ def play_melody(sound_queue, notes):
         duration /= 1000
         start, stop = _note2tones(t, tone, duration)
         _enqueue_tone(start)
-        _enqueue_tone(stop)
+        if stop:
+            _enqueue_tone(stop)
         t += duration
     return t
 
@@ -101,7 +103,18 @@ class Rainbow(Scene):
 
 class Kaleidoscope(Scene):
     def light_cues(self):
-        pass
+
+        color = Color.from_hsv(h=1, s=1, v=1)
+        while True:
+            hue = Hue(deg=random.randint(-180, 180))
+            next_color = color + hue
+            for step_color in color.gradient(next_color, steps=int(round(hue.deg)), easing=ease_in_out):
+                yield LightCue(
+                    at=time.time() + .05,
+                    indexes=[0, 1, 2],
+                    color=step_color
+                )
+            color = next_color
 
 
 # FIXME factor out handler interface
@@ -162,7 +175,7 @@ class ButtonState:
 
 def main():
     leds = [RGBLED(r, g, b) for r, g, b in LED_PINS]
-    scene = Rainbow()
+    scene = Kaleidoscope()
     button = Button(BUTTON_PIN)
     buzzer = TonalBuzzer(BUZZER_PIN)
     sound_cues = queue.Queue()
@@ -204,9 +217,9 @@ def main():
     light_cues = scene.light_cues()
 
     play_melody(sound_cues, [
-        ("A4", NOTE_EIGHTH),
-        ("B4", NOTE_EIGHTH),
-        ("C4", NOTE_EIGHTH),
+        ("B4", NOTE_SIXTEENTH),
+        (None, NOTE_SIXTEENTH),
+        ("A4", NOTE_SIXTEENTH),
     ])
 
     next_light_cue = next(light_cues)
