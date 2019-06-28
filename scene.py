@@ -100,7 +100,7 @@ class Rainbow(Scene):
         color = Color.from_hsv(h=1, s=1, v=1)
         while True:
             yield LightCue(
-                at=time.time() + .1,
+                at=time.time() + .025,
                 indexes=ALL_LEDS,
                 color=color
             )
@@ -113,18 +113,19 @@ class Kaleidoscope(Scene):
 
         color = Color.from_hsv(h=1, s=1, v=1)
         while True:
-
             hue = Hue(deg=0)
             while hue.deg <= 2:
                 hue = Hue(deg=random.randint(-180, 180))
-            steps = int(round(abs(hue.deg/2)))
+            steps = max(int(round(abs(hue.deg/10))), 10)
             next_color = color + hue
-            for step_color in color.gradient(next_color, steps=steps, easing=ease_in_out):
-                yield LightCue(
-                    at=time.time() + TICK/1000,
-                    indexes=ALL_LEDS,
-                    color=step_color
-                )
+            for step_color in color.gradient(next_color, steps=steps):
+                for index in ALL_LEDS:
+                    now = time.time()
+                    yield LightCue(
+                        at=now + .025,
+                        indexes=[index],
+                        color=step_color,
+                    )
             color = next_color
 
 
@@ -184,16 +185,38 @@ class ButtonState:
         pass
 
 
+SCENES = [
+    Rainbow,
+    Kaleidoscope,
+]
+NUM_SCENES = len(SCENES)
+
+
 def main():
     leds = [RGBLED(r, g, b, active_high=False) for r, g, b in LED_PINS]
-    scene = Kaleidoscope()
     button = Button(BUTTON_PIN)
     buzzer = TonalBuzzer(BUZZER_PIN)
     sound_cues = queue.Queue()
 
+    scene = Rainbow()
+    light_cues = scene.light_cues()
+    scene_index = random.randrange(NUM_SCENES)
+
     light_disabled = Event()
+    switch_scene = Event()
 
     class DebugState(ButtonState):
+        def on_button_press(self):
+            print("press")
+
+            if light_disabled.is_set():
+                light_disabled.clear()
+            else:
+                switch_scene.set()
+                play_melody(sound_cues, [
+                    ("A4", NOTE_SIXTEENTH),
+                ])
+
         def on_long_press(self):
             print("long press")
             if light_disabled.is_set():
@@ -222,7 +245,6 @@ def main():
     tick = 0
     last = time.time()
     total_time = 0
-    light_cues = scene.light_cues()
 
     play_melody(sound_cues, [
         ("A4", NOTE_SIXTEENTH),
@@ -236,6 +258,14 @@ def main():
     while True:
         now = time.time()
         button_state.update(now, button.is_pressed)
+
+        if switch_scene.is_set():
+            switch_scene.clear()
+            scene = SCENES[scene_index % NUM_SCENES]()
+            print("switched", scene)
+            light_cues = scene.light_cues()
+            next_light_cue = next(light_cues)
+            scene_index += 1
 
         if not light_disabled.is_set():
             if next_light_cue and now >= next_light_cue.at:
