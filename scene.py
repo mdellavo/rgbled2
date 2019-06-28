@@ -2,10 +2,20 @@ import abc
 import time
 import queue
 import random
+import logging
+from threading import Event
 
 from gpiozero import Button, RGBLED, TonalBuzzer
 from gpiozero.tones import Tone
 from colorzero import Color, Hue, ease_in_out
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="",
+)
+
+log = logging.getLogger(__name__)
+
 
 FPS_INTERVAL = 30
 FPS = 60
@@ -15,16 +25,13 @@ LED_PINS = [
     (16, 20, 21),
     (13, 19, 26),
     (18, 23, 24),
-    (17, 22, 27),
+    (4, 5, 6),
 ]
 NUM_LEDS = len(LED_PINS)
+ALL_LEDS = list(range(NUM_LEDS))
 
 BUTTON_PIN = 12
 BUZZER_PIN = 25
-
-
-def printf(fmt, *args, **kwargs):
-    print(fmt.format(*args, **kwargs))
 
 
 NOTE_WHOLE, NOTE_HALF, NOTE_QUARTER, NOTE_EIGHTH, NOTE_SIXTEENTH = [4000/(2**i) for i in range(5)]
@@ -94,7 +101,7 @@ class Rainbow(Scene):
         while True:
             yield LightCue(
                 at=time.time() + .1,
-                indexes=[0, 1, 2],
+                indexes=ALL_LEDS,
                 color=color
             )
             i += 1
@@ -106,12 +113,16 @@ class Kaleidoscope(Scene):
 
         color = Color.from_hsv(h=1, s=1, v=1)
         while True:
-            hue = Hue(deg=random.randint(-180, 180))
+
+            hue = Hue(deg=0)
+            while hue.deg <= 2:
+                hue = Hue(deg=random.randint(-180, 180))
+            steps = int(round(abs(hue.deg/2)))
             next_color = color + hue
-            for step_color in color.gradient(next_color, steps=int(round(hue.deg)), easing=ease_in_out):
+            for step_color in color.gradient(next_color, steps=steps, easing=ease_in_out):
                 yield LightCue(
-                    at=time.time() + .05,
-                    indexes=[0, 1, 2],
+                    at=time.time() + TICK/1000,
+                    indexes=ALL_LEDS,
                     color=step_color
                 )
             color = next_color
@@ -174,32 +185,29 @@ class ButtonState:
 
 
 def main():
-    leds = [RGBLED(r, g, b) for r, g, b in LED_PINS]
+    leds = [RGBLED(r, g, b, active_high=False) for r, g, b in LED_PINS]
     scene = Kaleidoscope()
     button = Button(BUTTON_PIN)
     buzzer = TonalBuzzer(BUZZER_PIN)
     sound_cues = queue.Queue()
 
+    light_disabled = Event()
+
     class DebugState(ButtonState):
-        def on_button_down(self):
-            print("down")
-            buzzer.play(Tone("B4"))
-
-        def on_button_up(self, held_time):
-            print("up", held_time)
-            buzzer.stop()
-
-        def on_button_press(self):
-            print("press")
-            #buzzer.play(Tone("C4"))
-
         def on_long_press(self):
             print("long press")
-            #buzzer.play(Tone("D4"))
-
-        def on_repeat_click(self, clicks):
-            print("repeat", clicks)
-            #buzzer.play(Tone("E4"))
+            if light_disabled.is_set():
+                light_disabled.clear()
+                play_melody(sound_cues, [
+                    ("A4", NOTE_SIXTEENTH),
+                ])
+            else:
+                light_disabled.set()
+                for led in leds:
+                    led.off()
+                play_melody(sound_cues, [
+                    ("B4", NOTE_SIXTEENTH),
+                ])
 
     button_state = DebugState()
 
@@ -217,8 +225,8 @@ def main():
     light_cues = scene.light_cues()
 
     play_melody(sound_cues, [
+        ("A4", NOTE_SIXTEENTH),
         ("B4", NOTE_SIXTEENTH),
-        (None, NOTE_SIXTEENTH),
         ("A4", NOTE_SIXTEENTH),
     ])
 
@@ -229,14 +237,17 @@ def main():
         now = time.time()
         button_state.update(now, button.is_pressed)
 
-        if next_light_cue and now >= next_light_cue.at:
-            # print("light cue", next_light_cue)
-            next_light_cue.apply(leds)
-            next_light_cue = next(light_cues)
+        if not light_disabled.is_set():
+            if next_light_cue and now >= next_light_cue.at:
+                next_light_cue.apply(leds)
+                next_light_cue = None
+            if not next_light_cue:
+                next_light_cue = next(light_cues)
 
         if next_sound_cue and now >= next_sound_cue.at:
-            # print("sound cue", next_sound_cue)
             next_sound_cue.apply(buzzer)
+            next_sound_cue = None
+        if not next_sound_cue:
             next_sound_cue = _next_sound_cue()
 
         delta = now - last
